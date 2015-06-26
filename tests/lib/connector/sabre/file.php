@@ -44,19 +44,74 @@ class File extends \Test\TestCase {
 		return $stream;
 	}
 
+
+	public function fopenFailuresProvider() {
+		return [
+			[
+				$this->returnValue(false),
+				'\Sabre\Dav\Exception'
+			],
+			[
+				$this->throwException(new \OCP\Files\NotPermittedException()),
+				'Sabre\DAV\Exception\Forbidden'
+			],
+			[
+				$this->throwException(new \OCP\Files\EntityTooLargeException()),
+				'OC\Connector\Sabre\Exception\EntityTooLarge'
+			],
+			[
+				$this->throwException(new \OCP\Files\InvalidContentException()),
+				'OC\Connector\Sabre\Exception\UnsupportedMediaType'
+			],
+			[
+				$this->throwException(new \OCP\Files\InvalidPathException()),
+				'Sabre\DAV\Exception\Forbidden'
+			],
+			[
+				$this->throwException(new \OCP\Files\LockNotAcquiredException()),
+				'OC\Connector\Sabre\Exception\FileLocked'
+			],
+			[
+				$this->throwException(new \OCP\Lock\LockedException()),
+				'OC\Connector\Sabre\Exception\FileLocked'
+			],
+			[
+				$this->throwException(new \OCP\Encryption\Exceptions\GenericEncryptionException()),
+				'Sabre\DAV\Exception\ServiceUnavailable'
+			],
+			[
+				$this->throwException(new \OCP\Files\StorageNotAvailableException()),
+				'Sabre\DAV\Exception\ServiceUnavailable'
+			],
+		];
+	}
+
 	/**
-	 * @expectedException \Sabre\DAV\Exception
+	 * @dataProvider fopenFailuresProvider
 	 */
-	public function testSimplePutFails() {
+	public function testSimplePutFails($fopenOutcome, $expectedException) {
 		// setup
-		$storage = $this->getMock('\OC\Files\Storage\Local', ['fopen'], [['datadir' => \OC::$server->getTempManager()->getTemporaryFolder()]]);
+		$storage = $this->getMock(
+			'\OC\Files\Storage\Local',
+			['fopen', 'unlink'],
+			[['datadir' => \OC::$server->getTempManager()->getTemporaryFolder()]]
+		);
 		$view = $this->getMock('\OC\Files\View', array('getRelativePath', 'resolvePath'), array());
 		$view->expects($this->any())
 			->method('resolvePath')
-			->will($this->returnValue(array($storage, '')));
+			->will($this->returnCallback(
+				function($path) use ($storage, &$partFile){
+					if (substr($path, -5) === '.part') {
+						$storage->expects($this->once())
+							->method('unlink')
+							->with($path);
+					}
+					return [$storage, $path];
+				}
+			));
 		$storage->expects($this->once())
 			->method('fopen')
-			->will($this->returnValue(false));
+			->will($fopenOutcome);
 
 		$view->expects($this->any())
 			->method('getRelativePath')
@@ -69,7 +124,14 @@ class File extends \Test\TestCase {
 		$file = new \OC\Connector\Sabre\File($view, $info);
 
 		// action
-		$file->put('test data');
+		$caughtException = null;
+		try {
+			$file->put('test data');
+		} catch (\Exception $e) {
+			$caughtException = $e;
+		}
+
+		$this->assertInstanceOf($expectedException, $caughtException);
 	}
 
 	private function doPut($path, $viewRoot = null) {
@@ -228,23 +290,92 @@ class File extends \Test\TestCase {
 	/**
 	 * @expectedException \Sabre\DAV\Exception
 	 */
-	public function testSimplePutFailsOnRename() {
+	public function testSimplePutFailsSizeCheck() {
 		// setup
-		$view = $this->getMock('\OC\Files\View',
-			array('rename', 'getRelativePath', 'filesize'));
+		$storage = $this->getMock(
+			'\OC\Files\Storage\Local',
+			['unlink'],
+			[['datadir' => \OC::$server->getTempManager()->getTemporaryFolder()]]
+		);
+		$view = $this->getMock(
+			'\OC\Files\View',
+			['getRelativePath', 'resolvePath', 'filesize'],
+			[]
+		);
 		$view->expects($this->any())
-			->method('rename')
-			->withAnyParameters()
-			->will($this->returnValue(false));
+			->method('resolvePath')
+			->will($this->returnCallback(
+				function($path) use ($storage, &$partFile){
+					if (substr($path, -5) === '.part') {
+						$storage->expects($this->once())
+							->method('unlink')
+							->with($path);
+					}
+					return [$storage, $path];
+				}
+			));
+
 		$view->expects($this->any())
 			->method('getRelativePath')
 			->will($this->returnValue('/test.txt'));
+
 		$view->expects($this->any())
 			->method('filesize')
 			->will($this->returnValue(123456));
 
 		$_SERVER['CONTENT_LENGTH'] = 123456;
 		$_SERVER['REQUEST_METHOD'] = 'PUT';
+
+		$info = new \OC\Files\FileInfo('/test.txt', null, null, array(
+			'permissions' => \OCP\Constants::PERMISSION_ALL
+		), null);
+
+		$file = new \OC\Connector\Sabre\File($view, $info);
+
+		// action
+		$file->put($this->getStream('test data'));
+	}
+
+	/**
+	 * @expectedException \OC\Connector\Sabre\Exception\FileLocked
+	 */
+	public function testSimplePutFailsMoveFromStorage() {
+		// setup
+		$storage = $this->getMock(
+			'\OC\Files\Storage\Local',
+			['unlink', 'moveFromStorage'],
+			[['datadir' => \OC::$server->getTempManager()->getTemporaryFolder()]]
+		);
+
+		$storage->expects($this->once())
+			->method('moveFromStorage')
+			->will($this->throwException(new \OCP\Lock\LockedException('/test.txt')));
+
+		$view = $this->getMock(
+			'\OC\Files\View',
+			['getRelativePath', 'resolvePath', 'filesize'],
+			[]
+		);
+		$view->expects($this->any())
+			->method('resolvePath')
+			->will($this->returnCallback(
+				function($path) use ($storage, &$partFile){
+					if (substr($path, -5) === '.part') {
+						$storage->expects($this->once())
+							->method('unlink')
+							->with($path);
+					}
+					return [$storage, $path];
+				}
+			));
+
+		$view->expects($this->any())
+			->method('getRelativePath')
+			->will($this->returnValue('/test.txt'));
+
+		$view->expects($this->any())
+			->method('filesize')
+			->will($this->returnValue(123456));
 
 		$info = new \OC\Files\FileInfo('/test.txt', null, null, array(
 			'permissions' => \OCP\Constants::PERMISSION_ALL

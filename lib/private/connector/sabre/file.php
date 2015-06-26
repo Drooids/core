@@ -163,6 +163,10 @@ class File extends Node implements IFile {
 			// the path for the file was not valid
 			// TODO: find proper http status code for this case
 			throw new Forbidden($e->getMessage());
+		} catch (LockedException $e) {
+			$partStorage->unlink($internalPartPath);
+			// the file is currently being written to by another process
+			throw new FileLocked($e->getMessage(), $e->getCode(), $e);
 		} catch (LockNotAcquiredException $e) {
 			$partStorage->unlink($internalPartPath);
 			// the file is currently being written to by another process
@@ -202,6 +206,7 @@ class File extends Node implements IFile {
 			try {
 				$this->fileView->changeLock($this->path, ILockingProvider::LOCK_EXCLUSIVE);
 			} catch (LockedException $e) {
+				$partStorage->unlink($internalPartPath);
 				throw new FileLocked($e->getMessage(), $e->getCode(), $e);
 			}
 
@@ -217,6 +222,10 @@ class File extends Node implements IFile {
 						$partStorage->unlink($internalPartPath);
 						throw new Exception('Could not rename part file to final file');
 					}
+				} catch (LockedException $e) {
+					$partStorage->unlink($internalPartPath);
+					// the file is currently being written to by another process
+					throw new FileLocked($e->getMessage(), $e->getCode(), $e);
 				} catch (\OCP\Files\LockNotAcquiredException $e) {
 					$partStorage->unlink($internalPartPath);
 					// the file is currently being written to by another process
