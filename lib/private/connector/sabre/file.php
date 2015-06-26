@@ -147,25 +147,32 @@ class File extends Node implements IFile {
 			}
 
 		} catch (NotPermittedException $e) {
+			$partStorage->unlink($internalPartPath);
 			// a more general case - due to whatever reason the content could not be written
 			throw new Forbidden($e->getMessage());
 		} catch (EntityTooLargeException $e) {
+			$partStorage->unlink($internalPartPath);
 			// the file is too big to be stored
 			throw new EntityTooLarge($e->getMessage());
 		} catch (InvalidContentException $e) {
+			$partStorage->unlink($internalPartPath);
 			// the file content is not permitted
 			throw new UnsupportedMediaType($e->getMessage());
 		} catch (InvalidPathException $e) {
+			$partStorage->unlink($internalPartPath);
 			// the path for the file was not valid
 			// TODO: find proper http status code for this case
 			throw new Forbidden($e->getMessage());
 		} catch (LockNotAcquiredException $e) {
+			$partStorage->unlink($internalPartPath);
 			// the file is currently being written to by another process
 			throw new FileLocked($e->getMessage(), $e->getCode(), $e);
 		} catch (GenericEncryptionException $e) {
+			$partStorage->unlink($internalPartPath);
 			// returning 503 will allow retry of the operation at a later point in time
 			throw new ServiceUnavailable("Encryption not ready: " . $e->getMessage());
 		} catch (StorageNotAvailableException $e) {
+			$partStorage->unlink($internalPartPath);
 			throw new ServiceUnavailable("Failed to write file contents: " . $e->getMessage());
 		}
 
@@ -211,6 +218,7 @@ class File extends Node implements IFile {
 						throw new Exception('Could not rename part file to final file');
 					}
 				} catch (\OCP\Files\LockNotAcquiredException $e) {
+					$partStorage->unlink($internalPartPath);
 					// the file is currently being written to by another process
 					throw new FileLocked($e->getMessage(), $e->getCode(), $e);
 				}
@@ -384,6 +392,9 @@ class File extends Node implements IFile {
 						// only delete if an error occurred and the target file was already created
 						if ($fileExists) {
 							$this->fileView->unlink($targetPath);
+						} else {
+							// stray part file
+							$this->fileView->unlink($partFile);
 						}
 						throw new Exception('Could not rename part file assembled from chunks');
 					}
@@ -403,8 +414,14 @@ class File extends Node implements IFile {
 				$info = $this->fileView->getFileInfo($targetPath);
 				return $info->getEtag();
 			} catch (StorageNotAvailableException $e) {
+				if ($partFile) {
+					$this->fileView->unlink($partFile);
+				}
 				throw new ServiceUnavailable("Failed to put file: " . $e->getMessage());
 			} catch (LockedException $e) {
+				if ($partFile) {
+					$this->fileView->unlink($partFile);
+				}
 				throw new FileLocked($e->getMessage(), $e->getCode(), $e);
 			}
 		}
